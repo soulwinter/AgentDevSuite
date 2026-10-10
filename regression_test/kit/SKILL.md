@@ -1,22 +1,22 @@
 ---
 name: trace-regression-kit
-description: Write or extend a project Kit, the shared operations, environment checks, test data, flows and cleanup that regression cases call, so each case states only actions and expectations.
+description: Write or extend a project Kit, the shared operations, data, flows and cleanup that regression cases call, so each case states only actions and expectations.
 ---
 
-A Kit is project-owned code next to the cases. It holds how to act in this project: locating controls, waiting for readiness, creating and reading back data, cleaning up. Cases call it and only state what to do and what to expect. Without a Kit, cases either use ctx.action (recorded, but only click and fill) or drive ctx.page directly (invisible in the record, a failure shows one timeout). Write the Kit once per project, or once per platform shared by all its projects.
+A Kit is project-owned helper code beside the cases (outside the case directories, or in underscore-prefixed paths that discovery skips). It holds how to act in this project: locating controls, waiting for readiness, creating and reading back data, cleaning up. Cases call it and only state what to do and what to expect. When registered targets and `ctx.action`/`ctx.observe` cover a project's cases, it needs no Kit. Write one when cases would otherwise drive `ctx.page` directly, which leaves no record of what ran. Write it once per project, or once per platform shared by all its projects.
 
-Agents write the Kit and then write cases from its documentation. Four rules keep both stable: anchors come from the project's own declarations, never guesses; the data model is derived from existing declarations (migrations, schemas, interface descriptions), never a parallel copy; an operation's name is a promise it verifies; a case author must not need to read Kit source.
+This skill adds Kit structure to the existing contracts; it does not replace them. Case metadata and lifecycle: [cases](../cases/SKILL.md). Adapter, REQUIREMENTS and identities: [environment](../environment/SKILL.md). ctx API, waits, shared fixtures, locks, timeouts and scoped reruns: [execution](../execution/SKILL.md). Registered targets and regions: [locator](../../instrumentation/locator/SKILL.md).
 
-## Shape
+Agents write the Kit and then write cases from its documentation. Four rules keep both stable: anchors come from the project's registry and declarations, never guesses; the data model is derived from existing declarations (migrations, schemas, interface descriptions), never a parallel copy; an operation's name is a promise it verifies; a case author must not need to read Kit source.
 
-One module exports a literal `KIT` manifest and any of `operations(ctx, base)`, `environment {resolve, check}`, `data {bind, cleanup}`, `flows`, `teardown(ctx)`. Omit what the project does not need. A Kit is not limited to web UI: an operation can run a command, call an interface, control a process or cut a network link, as long as it is recorded with ctx.step.
+## Shape and connection
 
-## Connect it to Trace
+One module exports a literal `KIT` manifest and any of `operations(ctx, base)`, `environment {resolve, check}`, `data {bind, cleanup}`, `flows`, `teardown(ctx)`. Omit what the project does not need. Operations are not limited to web UI: running a command, calling an interface, controlling a process or cutting a network link are operations too.
 
 Trace runs the case's `run(ctx)` and optional `cleanup(ctx)`; it does not load a Kit itself. Add two forwarding files beside the index and keep logic out of them:
 
-- a case entry exporting `setup(ctx)` and `finish(ctx)`. setup composes the layers, derives the case marker from `ctx.runId` and `ctx.caseId` (so another process can rebuild it), binds data and flows, and returns `{kit, data, flow}`. finish runs teardown, then data cleanup, and records the cleanup report as a step;
-- an `environment.adapter` entry re-exporting the Kit's `resolve` and `check` (see [environment](../environment/SKILL.md)).
+- a case entry exporting `setup(ctx)` and `finish(ctx)`. setup composes the layers, derives the case marker from `ctx.runId` and `ctx.caseId` (another process can rebuild it), binds data and flows, and returns `{kit, data, flow}`. finish runs teardown, then data cleanup, and records the cleanup report as a step;
+- the `environment.adapter` entry, re-exporting the Kit's `resolve` and `check`.
 
 ```js
 import {setup, finish} from '../../kit-entry.mjs';
@@ -29,13 +29,11 @@ export async function run(ctx) {
 export async function cleanup(ctx) { await finish(ctx); }
 ```
 
-A timeout or cancellation terminates the worker before cleanup(ctx) runs. Cleanup must therefore work from the marker and resources alone, and anything it needs from the case (for example created keys) must already be on disk.
+A timeout or cancellation terminates the worker before cleanup(ctx) runs. Cleanup must work from the marker and resources alone; anything it needs from the case, such as created keys, must already be on disk.
 
 ## Layers
 
 A platform Kit may have layers, each knowing only the one below: a platform layer (shell, navigation, generic reads and clicks, request waits, fault injection), an optional application layer (views, fields, tables, interface calls, deployment checks, data), then the project Kit (business flows, data declarations, few private operations). The project selects its base with `KIT.extends`; a project testing the platform itself extends the platform layer directly.
-
-Compose and document these rules:
 
 | Part | Composition |
 |---|---|
@@ -50,45 +48,42 @@ Promote what is not business-specific. If replacing the app, view and interface 
 
 ## Manifest
 
-`KIT` is a literal so tools can read it without executing code: `name`, `extends`, `operations: {<name>: {kind, anchor?, description?}}`, `flows: {<name>: {description, covers}}`. Common kinds are navigate, act, observe, wait, api and command; a Kit may add its own such as inject. `anchor` is the weakest locator tier the operation relies on. `description` states what the operation or flow returns, because case authors assert on it. Enforce at load time and document:
+`KIT` is a literal so tools can read it without executing code: `name`, `extends`, `operations: {<name>: {kind, anchor?, description?}}`, `flows: {<name>: {description, covers}}`. Common kinds are navigate, act, observe, wait, api and command; a Kit may add its own such as inject. `anchor` is the weakest tier the operation relies on. `description` states what the operation or flow returns, because case authors assert on it. Enforce at load time, and document:
 
 1. every flow has a description;
 2. `KIT.flows` and exported `flows` match one to one;
 3. an operation missing from its layer's `KIT.operations` fails when called;
-4. `covers` is an array of registered operation IDs.
+4. `covers` lists registered operation IDs.
 
 ## Operations
 
-Wrap every operation in `ctx.step(name, info, fn)` with a name a user understands. info is JSON evidence; Trace reads `kind` for grouping and `operation` (the registered operation ID) for coverage, and redacts credential-like keys. Steps nest. An action outside ctx.step does not appear in the record.
+Wrap every operation in `ctx.step(name, info, fn)` with a name a user understands. info is JSON evidence; put the registered operation ID in `operation` when the step drives a registered entry, so the record shows actual coverage.
 
-For UI operations:
+Anchors, weakest tier recorded in the manifest:
 
-1. Choose anchors by tier: L1 markers rendered from project declarations (data-field, data-trace-target, interface paths, landmark labels); L2 role and name inside an L1 scope; L3 text inside an L1 scope. Never CSS classes, element order or page-wide text.
-2. Give regions their own markers (tab bar, view actions, results) so equal labels in different regions stay distinct.
-3. Reads and clicks require exactly one match; fail and ask for a narrower scope instead of taking the first.
-4. Wait for conditions (a response, an element, a run state), never fixed sleeps or network idle.
-5. Wait for the request the action triggered. Matching only the interface name can catch the previous page or filter's response; let waits match request parameters and have the case pass the expected ones.
-6. Generic reads do not imply semantic roles: an editable region is not necessarily a textbox, a header not a banner. Offer a role-based operation when a role is asserted.
+- L1: markers the registry or the project's own declarations put in the page. Registered GUI entries use `entry.target` (`data-trace-target`) and result regions `data-trace-region`; assertion-only elements use `data-test-target`. A UI that renders markers from its own declarations (for example field names from a schema) is L1 when the Kit reads those declarations instead of copying names. Interface paths are L1 for waits.
+- L2: role and accessible name inside an L1 scope.
+- L3: text inside an L1 scope.
 
-For every operation:
+Never CSS classes, element order or page-wide text, and never a Kit-owned selector map that duplicates the registry. When a control the cases need has no marker, add it to the registry and the UI. Give each region (tab bar, view actions, results) its own marker so equal labels in different regions stay distinct. Reads and clicks require exactly one match. Fail and ask for a narrower scope rather than taking the first.
+
+Rules for every operation, in addition to the waiting rules in execution:
 
 1. The name is a promise. Verify the promised outcome and fail otherwise; never swallow a wait failure. If it cannot be verified, do not promise it.
-2. Return the IDs of what it created (sessions, tabs, files, processes) and register their release for teardown; counts are not enough for a case that must act only on its own resources.
-3. Before changing shared state (preferences, local storage, account settings), save the original and register a teardown item that restores it and reads it back.
-4. Cache keys contain every input that changes the verdict: address, identity, model, version. Cache failures for less time than successes.
-5. Document the fields of every returned object.
+2. A wait matches the request its action triggered, by path and request parameters the case passes, not by interface name alone.
+3. Return the IDs of what it created (sessions, tabs, files, processes) and register their release for teardown; counts are not enough for a case that must touch only its own resources.
+4. Before changing shared state (preferences, local storage, account settings), save the original and register a teardown item that restores it and reads it back.
+5. Generic reads do not imply semantic roles; an editable region is not necessarily a textbox. Offer a role-based operation when a role is asserted.
+6. Cache keys contain every input that changes the verdict: address, identity, model, version. Cache failures for less time than successes.
+7. Document the fields of every returned object.
 
-Commands, interfaces, processes and network controls record the command name, path or target in info. Use `ctx.command(..., {capture: false})` when output may contain secrets or private content.
+## Environment checks
 
-## Environment
+The adapter contract and what to require are in environment. The running artifact must match the source under test. `check` runs again before every case, so its cost multiplies by the case count:
 
-The adapter contract is in [environment](../environment/SKILL.md). A Kit's checks cover: the running version is the current source (otherwise failures are misattributed); external services a case declares in REQUIREMENTS (agents, models, third-party APIs) are usable; required identities exist (bind references in the ignored profile, never credentials; a second user is a second identity, not a second device); unknown requirements block.
-
-check runs before every case. Its cost multiplies by the case count:
-
-1. Cache expensive checks on every input that decides the verdict (for a deployment: app, environment, bundle hash, deployed commit, source commit) for a few minutes, in a temp file other processes can read.
+1. Cache an expensive check on every input that decides it (for a deployment: app, environment, bundle hash, deployed commit, source commit) for a few minutes, in a temp file other processes can read.
 2. Retry a transient failure (timeout, indeterminate status) once before blocking. Do not retry a definite mismatch.
-3. Make the reason specific: what was checked, exit code and the last output lines, expected and actual versions.
+3. Name what was checked and what came back: exit code and last output lines, expected and actual versions.
 4. Leave no side effects. If the underlying command writes receipts, caching is mandatory.
 
 ## Data
@@ -104,50 +99,44 @@ check runs before every case. Its cost multiplies by the case count:
 | remaining | per entity, still present though it should not be; required when complete is false |
 | reason | why cleanup is incomplete, such as no administrative connection |
 
-Report incomplete cleanup as complete: false, never as cleaned; a hook that throws is a cleanup error. Neither changes the case verdict.
+Incomplete cleanup is complete: false, never reported as cleaned; a hook that throws is a cleanup error. Neither changes the case verdict.
 
-- Every record a case creates, including through the UI, must be findable by the marker.
-- Separate the application channel (the test user through the project's interfaces) from an administrative channel (direct storage access for exact read-back, other-owner records and deletion). Without the administrative channel, declare a marker count per entity (for example a list interface searching the marker) so cleanup can report the real residue; never report complete without counting zero.
+- Every record a case creates, including through the UI, is findable by the marker.
+- Separate the application channel (the test user through the project's interfaces) from an administrative channel (direct storage access for exact read-back, other-owner records and deletion). Without the administrative channel, declare a marker count per entity (for example a list interface searching the marker) so cleanup reports the real residue; never report complete without counting zero.
 - Without a writable marker column, mark through a marked parent; otherwise record created keys on disk and delete by key.
-- Choose removal by nature: delete or withdraw what the case created, restore what it changed (restored), keep evidence on purpose (retained).
+- Delete or withdraw what the case created, restore what it changed (restored), keep evidence on purpose (retained).
 
-## Shared fixtures
+Shared read fixtures follow execution: a preparation script outside the run checks existing bindings and repairs only what is missing or stale, then the adapter exposes them. Do not top up shared data from a flow on every run.
 
-Data many read cases share (a channel with known messages, a fixed file, more than one page of rows) is prepared by a script outside the run. It checks existing bindings, repairs or recreates only what is missing or stale, never deletes, and writes bindings to the ignored environment profile; the adapter exposes them and cases declare them in REQUIREMENTS. Cases that need fresh data (create, empty state, withdrawal) make their own. Do not top up shared data from a flow on every run.
-
-## Flows
+## Flows and teardown
 
 Steps shared by two or more cases become a flow. Flows call only `kit` and `data`, run as one step with their operations nested, and return what their description says. Steps used by one case stay in that case.
 
-## Teardown
+Teardown releases non-data resources: fault injection routes, sessions, listeners, extra tabs, changed preferences. It runs after the case and before data cleanup, so an active fault injection cannot intercept cleanup requests. Undo registered items in reverse, record each as a step, continue past a failing item and rethrow the first error.
 
-Release non-data resources here: fault injection routes, sessions, listeners, extra tabs, changed preferences. It runs after the case and before data cleanup, so an active fault injection cannot intercept cleanup requests. Undo registered items in reverse, record each as a step, continue past a failing item and rethrow the first error.
+## Choosing locks
 
-## Concurrency and runs
-
-Declare `META.locks` by what the assertions need to stay stable, not by whether the case writes:
+Lock semantics are in execution. Choose by what the assertions need to stay stable, not by whether the case writes:
 
 | Case | Locks |
 |---|---|
-| reads and writes only its own marked data and asserts only on it, with no aggregate-asserting cases in the project | `[]` |
-| the same, when other cases assert account-wide aggregates | `["read:account"]` (shared with other such cases) |
+| uses and asserts only its own marked data, and no case asserts account-wide aggregates | `[]` |
+| the same, while other cases assert account-wide aggregates | `["read:account"]` |
 | asserts account-wide aggregates: totals, unfiltered lists, no additional records | `["write:account"]` |
 | changes account-wide settings or preferences | `["write:account"]`, and restore them |
 
-Treating every list assertion as account-wide serializes the whole suite; a list filtered by the case marker is not affected by other cases.
-
-One browser profile serves one Run at a time; a second Run on it fails immediately. Run projects one after another, or give each index its own browser profileDir and sign in to each once. `--timeoutMs` is per case; keep Kit waits well below it so a slow step reports what it waited for. After repairing a case, rerun it with `--ids` before the full suite.
+A list filtered by the case marker is not account-wide. Treating every list assertion as account-wide serializes the suite.
 
 ## Documentation
 
-The Kit README is what case authors read. Include: a minimal project Kit for each layer, including one extending the lowest layer, and the forwarding files; the composition rules; each operation's signature, return fields, and what it verifies or does not; the manifest rules; locks, profile and timeout rules; supported REQUIREMENTS, what each checks and how long it is cached. Describe parameters as the runtime behaves; change both together. Put any rule that can be checked into load-time validation as well as the README.
+The Kit README is what case authors read. Include a minimal project Kit for each layer (including one extending the lowest layer) with its forwarding files; the composition rules; each operation's signature, return fields, and what it verifies or does not; the manifest rules; the lock table; supported REQUIREMENTS, what each checks and how long it is cached. Link to the execution skill for run options instead of restating them; a project guide that restates them drifts. Describe parameters as the runtime behaves and change both together. Put any checkable rule into load-time validation as well.
 
 ## Verify
 
 1. Manifest validation passes.
 2. A platform Kit has fixture tests on local mock pages covering each operation kind, independent of real environments.
-3. One real-environment case uses every new operation and flow; inspect each recorded step, read-back value and the cleanup report. With an administrative connection, expect complete: true; without one, expect the real residue; retained data names its reason.
-4. Running the fixture script twice changes nothing the second time.
+3. One real-environment case uses every new operation and flow; inspect each recorded step, read-back value and the cleanup report. With an administrative connection expect complete: true; without one, the real residue; retained data names its reason.
+4. Running the fixture preparation twice changes nothing the second time.
 5. Compare the sum of case script durations with the Run's duration; a large gap means check, queueing or lock overhead.
 6. Look for business-independent helpers in project Kits and promote them.
-7. Have an agent without context write a few cases from the documentation alone; what it had to read in source or guessed wrong is a documentation gap.
+7. Have an agent without context write a few cases from the documentation alone; what it read in source or guessed wrong is a documentation gap.
