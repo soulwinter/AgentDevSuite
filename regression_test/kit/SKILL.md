@@ -3,7 +3,7 @@ name: trace-regression-kit
 description: Write or extend a project Kit, the shared operations, data, flows and cleanup that regression cases call, so each case states only actions and expectations.
 ---
 
-A Kit is project-owned helper code beside the cases (outside the case directories, or in underscore-prefixed paths that discovery skips). It holds how to act in this project: locating controls, waiting for readiness, creating and reading back data, cleaning up. Cases call it and only state what to do and what to expect. When registered targets and `ctx.action`/`ctx.observe` cover a project's cases, it needs no Kit. Write one when cases would otherwise drive `ctx.page` directly, which leaves no record of what ran. Write it once per project, or once per platform shared by all its projects.
+A Kit is project-owned helper code beside the cases (outside the case directories, or in underscore-prefixed paths that discovery skips). It holds how to act in this project: locating controls, waiting for readiness, creating and reading back data, cleaning up. Cases call it and only state what to do and what to expect. When registered targets and `ctx.action`/`ctx.observe` cover a project's cases, it needs no Kit. Write one when cases would otherwise drive `ctx.page` directly, which leaves no record of what ran. Write it once per project, or once per platform and share it.
 
 This skill adds Kit structure to the existing contracts; it does not replace them. Case metadata and lifecycle: [cases](../cases/SKILL.md). Adapter, REQUIREMENTS and identities: [environment](../environment/SKILL.md). ctx API, waits, shared fixtures, locks, timeouts and scoped reruns: [execution](../execution/SKILL.md). Registered targets and regions: [locator](../../instrumentation/locator/SKILL.md).
 
@@ -15,7 +15,7 @@ One module exports a literal `KIT` manifest and any of `operations(ctx, base)`, 
 
 Trace runs the case's `run(ctx)` and optional `cleanup(ctx)`; it does not load a Kit itself. Add two forwarding files beside the index and keep logic out of them:
 
-- a case entry exporting `setup(ctx)` and `finish(ctx)`. setup composes the layers, derives the case marker from `ctx.runId` and `ctx.caseId` (another process can rebuild it), binds data and flows, and returns `{kit, data, flow}`. finish runs teardown, then data cleanup, and records the cleanup report as a step;
+- a case entry exporting `setup(ctx)` and `finish(ctx)`. setup composes the project Kit with any Kit it extends, derives the case marker from `ctx.runId` and `ctx.caseId` (another process can rebuild it), binds data and flows, and returns `{kit, data, flow}`. finish runs teardown, then data cleanup, and records the cleanup report as a step;
 - the `environment.adapter` entry, re-exporting the Kit's `resolve` and `check`.
 
 ```js
@@ -31,28 +31,19 @@ export async function cleanup(ctx) { await finish(ctx); }
 
 A timeout or cancellation terminates the worker before cleanup(ctx) runs. Cleanup must work from the marker and resources alone; anything it needs from the case, such as created keys, must already be on disk.
 
-## Layers
+## Building on a shared Kit
 
-A platform Kit may have layers, each knowing only the one below: a platform layer (shell, navigation, generic reads and clicks, request waits, fault injection), an optional application layer (views, fields, tables, interface calls, deployment checks, data), then the project Kit (business flows, data declarations, few private operations). The project selects its base with `KIT.extends`; a project testing the platform itself extends the platform layer directly.
+Projects on one platform can share a Kit and add only their own part. The project names its base with `KIT.extends`. The shared Kit owns the composition and must document it: how its operations reach the project as `base` and whether a project operation may override one (an override calls the base operation rather than rewriting it), which Kit implements data, environment and teardown, and in what order teardown runs. How a platform divides its shared Kit is that platform's design, not part of this contract.
 
-| Part | Composition |
-|---|---|
-| operations | bottom-up; each layer receives the merged lower operations as `base` and returns base plus its own. A higher name wins; an override calls the base operation rather than rewriting it |
-| KIT.operations | merged like operations; each operation is declared in its own layer |
-| data | the highest layer exporting `data`; platform hooks receive the project module, so the project only declares entities |
-| flows | merged, higher layer wins; each layer's manifest and implementations are validated separately |
-| teardown | every layer's teardown, project first, then the items operations registered, last first |
-| environment | the highest layer's; requirements it does not know go to the layer below; unknown everywhere blocks |
-
-Promote what is not business-specific. If replacing the app, view and interface names leaves a function useful, it belongs in a lower layer. Two projects writing the same helper is proof.
+Promote what is not business-specific. If replacing the app, view and interface names leaves a function useful, it belongs in the shared Kit. Two projects writing the same helper is proof.
 
 ## Manifest
 
-`KIT` is a literal so tools can read it without executing code: `name`, `extends`, `operations: {<name>: {kind, anchor?, description?}}`, `flows: {<name>: {description, covers}}`. Common kinds are navigate, act, observe, wait, api and command; a Kit may add its own such as inject. `anchor` is the weakest tier the operation relies on. `description` states what the operation or flow returns, because case authors assert on it. Enforce at load time, and document:
+`KIT` is a literal so tools can read it without executing code: `name`, `extends`, `operations: {<name>: {kind, anchor?, description?}}`, `flows: {<name>: {description, covers}}`. Common kinds are navigate, act, observe, wait, api and command; a Kit may add its own such as inject. `anchor` is the weakest tier the operation relies on. `description` states what the operation or flow returns, because case authors assert on it. Enforce at load time (each Kit's own manifest when one extends another), and document:
 
 1. every flow has a description;
 2. `KIT.flows` and exported `flows` match one to one;
-3. an operation missing from its layer's `KIT.operations` fails when called;
+3. an operation missing from its own Kit's `KIT.operations` fails when called;
 4. `covers` lists registered operation IDs.
 
 ## Operations
@@ -129,12 +120,12 @@ A list filtered by the case marker is not account-wide. Treating every list asse
 
 ## Documentation
 
-The Kit README is what case authors read. Include a minimal project Kit for each layer (including one extending the lowest layer) with its forwarding files; the composition rules; each operation's signature, return fields, and what it verifies or does not; the manifest rules; the lock table; supported REQUIREMENTS, what each checks and how long it is cached. Link to the execution skill for run options instead of restating them; a project guide that restates them drifts. Describe parameters as the runtime behaves and change both together. Put any checkable rule into load-time validation as well.
+The Kit README is what case authors read. Include a minimal project Kit with its forwarding files, one for each base a project can extend; the composition rules; each operation's signature, return fields, and what it verifies or does not; the manifest rules; the lock table; supported REQUIREMENTS, what each checks and how long it is cached. Link to the execution skill for run options instead of restating them; a project guide that restates them drifts. Describe parameters as the runtime behaves and change both together. Put any checkable rule into load-time validation as well.
 
 ## Verify
 
 1. Manifest validation passes.
-2. A platform Kit has fixture tests on local mock pages covering each operation kind, independent of real environments.
+2. A shared Kit has fixture tests on local mock pages covering each operation kind, independent of real environments.
 3. One real-environment case uses every new operation and flow; inspect each recorded step, read-back value and the cleanup report. With an administrative connection expect complete: true; without one, the real residue; retained data names its reason.
 4. Running the fixture preparation twice changes nothing the second time.
 5. Compare the sum of case script durations with the Run's duration; a large gap means check, queueing or lock overhead.
