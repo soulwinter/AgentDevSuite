@@ -21,3 +21,15 @@ test('no provider configuration cannot issue a query; custom attributes isolate 
  fs.writeFileSync(config,JSON.stringify({...base,queryEndpoint:'https://user:password@example.com'}));assert.throws(()=>readConfig(config),/HTTPS/);
  }finally{globalThis.fetch=original;fs.rmSync(dir,{recursive:true,force:true});}
 });
+test('a loopback provider may use HTTP without tenant or credentials; remote HTTP stays rejected',async()=>{
+ const dir=fs.mkdtempSync(path.join(os.tmpdir(),'devops-loopback-'));const original=globalThis.fetch;const requests=[];
+ try{
+ globalThis.fetch=async(url,options)=>{requests.push({url,options});return {ok:true,json:async()=>({traces:[]})};};
+ const config=path.join(dir,'connection.json');fs.writeFileSync(config,JSON.stringify({queryEndpoint:'http://127.0.0.1:3200'}));
+ await query(config,'executions',{operation:'example.open'});
+ assert.equal(new URL(requests[0].url).host,'127.0.0.1:3200');assert.equal(requests[0].options.headers.Authorization,undefined);
+ fs.writeFileSync(config,JSON.stringify({queryEndpoint:'http://tempo.example:3200'}));assert.throws(()=>readConfig(config),/HTTPS/);
+ fs.writeFileSync(config,JSON.stringify({queryEndpoint:'https://customer.example/tempo'}));assert.throws(()=>readConfig(config),/credentials required/);
+ assert.throws(()=>configure({project:'remote-http',queryEndpoint:'http://tempo.example:3200'}),/HTTPS/);
+ }finally{globalThis.fetch=original;fs.rmSync(dir,{recursive:true,force:true});}
+});
