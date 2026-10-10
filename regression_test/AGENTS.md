@@ -14,7 +14,7 @@ Generic modules have no Colab imports or defaults. Runtime and generated outputs
 
 Ownership: cases/ holds parser code, record_store/ holds record persistence code, catalog/ui/ holds rendering. Business scripts and real run outputs belong to the configured target repository. Scheduler completion must not imply test success.
 
-Consumer routing is regression_test/SKILL.md -> cases, execution, record_store SKILL.md. Keep architecture, development status and rationale here or the implementation plan. GUI agent guidance is extracted verbatim from the Run regression section; do not maintain a second prompt template with different instructions.
+Consumer routing is regression_test/SKILL.md -> cases, environment, execution, kit, record_store SKILL.md. Keep architecture, development status and rationale here or the implementation plan. GUI agent guidance is extracted verbatim from the Run regression section; do not maintain a second prompt template with different instructions.
 
 One-run handoff is not a CLI manual: Run regression is a short consumer instruction plus one quoted command. Metadata syntax, alternative profiles/transports and lifecycle options live in execution/SKILL.md for on-demand reading. Avoid duplicate target/filter descriptions and equivalent plan/run command blocks. Omit default flags without changing selection semantics.
 
