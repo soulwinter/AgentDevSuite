@@ -11,11 +11,16 @@ function fail(name,actual,expected){const ok=isDeepStrictEqual(actual,expected);
 let depth=0;
 function stepInfo(info){if(info==null)return undefined;if(typeof info!=='object'||Array.isArray(info))throw Error('Step info must be an object');return JSON.parse(JSON.stringify(info,(k,v)=>/token|secret|password|authorization|cookie/i.test(k)?'[REDACTED]':v));}
 async function step(name,target,fn,info){if(typeof name!=='string'||!name.trim())throw Error('Step name required');if(typeof fn!=='function')throw Error('Step function required');const t=performance.now();const row={name,target,status:'running',...(depth?{depth}:{}),...(info?{info}:{})};result.steps.push(row);write();depth++;try{const v=await fn();row.status='passed';return v;}catch(e){row.status='failed';row.error=shortError(e);throw e;}finally{depth--;row.durationMs=performance.now()-t;write();}}
-function capturePage(page){if(!config.telemetry)return;page.on('request',r=>{const h=r.headers(),match=h.traceparent?.match(/^00-([a-f0-9]{32})-/i);if(match&&!result.traceRefs.some(x=>x.traceId===match[1])){result.traceRefs.push({traceId:match[1],source:'gui'});write();}});}
+// guiTraceparent:false turns off request-header capture for hosts whose own instrumentation rewrites traceparent;
+// the project then reports its operations' trace IDs with ctx.traceRef.
+function addTraceRef(traceId,source){if(!result.traceRefs.some(x=>x.traceId===traceId)){result.traceRefs.push({traceId,source});write();}}
+function capturePage(page){if(!config.telemetry||config.telemetry.guiTraceparent===false)return;page.on('request',r=>{const h=r.headers(),match=h.traceparent?.match(/^00-([a-f0-9]{32})-/i);if(match&&!result.traceRefs.some(x=>x.traceId===match[1])){result.traceRefs.push({traceId:match[1],source:'gui'});write();}});}
 const ctx={repo,resources:input.resources||{},parameters:input.parameters||{},baseUrl:config.baseUrl,input:config.input||{},runId:input.runId,caseId:c.id,
  assert:fail,
  async newPage(){if(!process.send||!driver)throw Error('Run-owned browser required');const requestId=crypto.randomUUID();const response=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>{process.off('message',receive);reject(Error('Auxiliary tab allocation timeout'));},10000);function receive(m){if(m?.requestId!==requestId)return;clearTimeout(timer);process.off('message',receive);m.error?reject(Error(m.error)):resolve(m);}process.on('message',receive);process.send({type:'newPage',requestId});});const page=await driver.findPage(response.pageUrl);capturePage(page);return page;},
  block(reason){const e=Error(reason);e.kind='blocked';throw e;},
+ // A trace the project's own code started (for example spans it exported itself); collected like captured ones.
+ traceRef(traceId){if(typeof traceId!=='string'||!/^[a-f0-9]{32}$/i.test(traceId))throw Error('Trace ID must be 32 hex characters');addTraceRef(traceId.toLowerCase(),'project');},
  // Named step around any project operation; info is JSON evidence (anchor, operation ID, inputs) recorded with it.
  async step(name,info,fn){if(typeof info==='function'){fn=info;info=undefined;}return step(name,null,fn,stepInfo(info));},
  async action(name,{target,action,value}){return step(name,target,async()=>{if(!ctx.page)throw Error('GUI context unavailable');const selector=config.targets?.[target];if(!selector)throw Error('Unregistered test target '+target);const l=ctx.page.locator(selector);if(action==='click')await l.click();else if(action==='fill')await l.fill(value);else throw Error('Unknown action');});},
