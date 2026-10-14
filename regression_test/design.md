@@ -131,6 +131,8 @@ regression.yaml fields:
 
 Run states: running / completed / cancelled / interrupted. Case outcomes: passed / failed / blocked / error / cancelled. An assertion may additionally be inconclusive; a case cannot be passed if a required assertion is inconclusive. Separate case lifecycle from run outcome.
 
+For a terminal case, steps whose last snapshot is running are displayed as interrupted, with completion and cleanup explicitly unknown. This is a read-only presentation of the snapshot; retain the recorded status, errors, durations and YAML unchanged. Running steps in a live or pending case retain their live presentation.
+
 Write progress atomically to YAML during execution; seal the result once terminal. On restart identify abandoned running records as interrupted, preserving completed attempts. A seal is a writer invariant, not an audit/signing system. Later agent diagnosis goes in a separate analysis.yaml referencing case/attempt IDs, preserving the original recorded facts.
 
 Store needed performance values and bounded span summaries because provider traces expire; do not duplicate entire cloud trace storage. Keep prompts/business output only under the project's capture policy and redact tokens. No scripts/ archive, release snapshots or compulsory audit trail.
